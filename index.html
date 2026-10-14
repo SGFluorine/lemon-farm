@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>レモン農園（仮）</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #bfe6ff; }
+    canvas { display: block; }
+    #hud {
+      position: fixed; left: 12px; top: 12px;
+      padding: 6px 12px; border-radius: 10px;
+      background: rgba(255, 255, 255, 0.85);
+      font: bold 16px sans-serif; color: #333;
+    }
+    #money {
+      position: fixed; right: 12px; top: 12px;
+      padding: 6px 16px; border-radius: 12px;
+      background: #fff3b0; border: 3px solid #f5b800;
+      font: bold 24px sans-serif; color: #7a5200;
+    }
+    /* 「⬆ アップグレード」ボタン（所持金の下） */
+    #upgrade-open {
+      position: fixed; right: 12px; top: 72px;
+      cursor: pointer; padding: 6px 14px; border-radius: 12px;
+      background: #2b2f3a; border: 3px solid #d6b44a; box-shadow: 0 3px 0 #8a7020;
+      font: bold 14px sans-serif; color: #ffe9a8;
+    }
+    .upgrade-badge {
+      margin-left: 4px; font-size: 11px; padding: 1px 6px; border-radius: 8px;
+      background: #57d36a; color: #10301a;
+    }
+    .upgrade-badge:empty { display: none; }
+
+    /* アップグレードのマップ（スキルツリー）。暗い背景に、光るノードと線 */
+    #upgrade-map {
+      position: fixed; inset: 0; z-index: 20;
+      display: flex; flex-direction: column;
+      background: rgba(18, 20, 28, 0.93); font-family: sans-serif; color: #eee;
+    }
+    #upgrade-map[hidden] { display: none; }
+    .map-header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 10px 16px; font: bold 18px sans-serif; color: #ffe9a8;
+    }
+    .map-close {
+      cursor: pointer; width: 34px; height: 34px; border-radius: 8px;
+      background: #3a3f4d; border: 2px solid #6b7285; color: #fff; font-size: 16px;
+    }
+    .map-area { position: relative; flex: 1; overflow: hidden; }
+    .map-canvas {
+      position: absolute; left: 50%; top: 50%; width: 900px; height: 900px;
+      transform-origin: center;
+    }
+    .map-canvas svg { position: absolute; left: 0; top: 0; pointer-events: none; }
+    .map-canvas line { stroke-width: 4; }
+    .map-canvas line.path-owned { stroke: #e2c25a; }
+    .map-canvas line.path-open { stroke: #8b93a8; }
+    .map-canvas line.path-locked { stroke: #4a5062; stroke-dasharray: 6 6; }
+
+    .map-root, .map-node, .map-branch-title { position: absolute; transform: translate(-50%, -50%); }
+    .map-root {
+      width: 64px; height: 64px; border-radius: 50%;
+      display: grid; place-items: center; font-size: 34px;
+      background: #3b3520; border: 3px solid #e2c25a; box-shadow: 0 0 16px rgba(226, 194, 90, 0.6);
+    }
+    .map-branch-title { font: bold 13px sans-serif; color: #c9cfdd; white-space: nowrap; }
+
+    /* ノード：アイコンの四角＋下にレベル */
+    .map-node {
+      width: 58px; height: 58px; padding: 0; cursor: pointer;
+      border-radius: 12px; border: 3px solid #6b7285; background: #2b2f3a;
+      display: grid; place-items: center;
+      transition: transform 0.1s;
+    }
+    .map-node:hover { transform: translate(-50%, -50%) scale(1.12); }
+    .node-icon { font-size: 26px; line-height: 1; }
+    .node-level {
+      position: absolute; bottom: -20px; left: 50%; transform: translateX(-50%);
+      font: bold 12px sans-serif; color: #c9cfdd; white-space: nowrap;
+    }
+    .map-node.owned { border-color: #d6b44a; }
+    .map-node.maxed { border-color: #ffd84d; background: #4a3f18; box-shadow: 0 0 12px rgba(255, 216, 77, 0.7); }
+    .map-node.maxed .node-level { color: #ffd84d; }
+    .map-node.affordable { border-color: #57d36a; box-shadow: 0 0 14px rgba(87, 211, 106, 0.8); animation: node-glow 1.2s ease-in-out infinite; }
+    @keyframes node-glow { 50% { box-shadow: 0 0 4px rgba(87, 211, 106, 0.4); } }
+    .map-node.state-peek { opacity: 0.45; filter: grayscale(0.8); }
+    .map-node.state-peek .node-icon::after { content: '🔒'; position: absolute; right: -6px; top: -8px; font-size: 14px; }
+    .map-node.state-hidden { opacity: 0.35; border-style: dashed; cursor: default; }
+    .map-node.state-hidden .node-icon { font: bold 24px sans-serif; color: #8b93a8; }
+    /* 「買えば解決」のノード（回収機が満杯のときの容量アップなど） */
+    .map-node.hint { border-color: #ff7043; animation: hint-pulse 0.9s ease-in-out infinite; }
+
+    /* ノードの説明の枠（参考画像のような、四角い枠に名前・効果・Lv・値段） */
+    .map-tooltip {
+      position: fixed; z-index: 21; transform: translateX(-50%); pointer-events: none;
+      min-width: 200px; max-width: 260px; text-align: center;
+      background: #1c1f28; border: 2px solid #d6b44a; border-radius: 6px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    }
+    .tip-name { padding: 6px 10px; font: bold 15px sans-serif; color: #fff; border-bottom: 1px solid #3a3f4d; }
+    .tip-desc { padding: 6px 10px; font-size: 13px; color: #d5d9e3; border-bottom: 1px solid #3a3f4d; }
+    .tip-level { padding: 4px 10px; font: bold 14px sans-serif; color: #fff; }
+    .tip-footer { padding: 5px 10px; font: bold 14px sans-serif; }
+    .tip-buy { background: #2f7d3d; color: #e6ffe9; }
+    .tip-poor { background: #4a3a3a; color: #ffb3a8; }
+    .tip-max { background: #a8902c; color: #fff8d6; }
+    .tip-locked { background: #3a3f4d; color: #c9cfdd; }
+
+    /* 統計（左上、開け閉めできる） */
+    #stats { position: fixed; left: 12px; top: 56px; font-family: sans-serif; }
+    #stats-toggle {
+      cursor: pointer; padding: 4px 10px; border-radius: 10px;
+      background: #fff; border: 2px solid #7aa7d9; color: #335;
+      font: bold 13px sans-serif;
+    }
+    #stats-panel {
+      margin-top: 6px; width: 210px; padding: 8px 12px; border-radius: 10px;
+      background: rgba(255, 255, 255, 0.92); font-size: 13px; color: #333;
+    }
+    .stats-row, .stats-sub { display: flex; justify-content: space-between; }
+    .stats-row { margin: 2px 0; }
+    .stats-sub { padding-left: 10px; color: #666; font-size: 12px; }
+
+    /* 上限の表示（8割でオレンジ、満杯で赤く点滅） */
+    .cap.warn { color: #e08a00; }
+    .cap.full { color: #e53935; animation: blink 0.8s step-start infinite; }
+    @keyframes blink { 50% { opacity: 0.35; } }
+
+    /* 回収機・出口の上に浮かぶ「満杯！」の札 */
+    .world-label {
+      position: fixed; pointer-events: none;
+      transform: translate(-50%, -100%);
+      padding: 3px 10px; border-radius: 10px;
+      background: #e53935; color: #fff; font: bold 14px sans-serif;
+      box-shadow: 0 2px 0 #a52020;
+      animation: bob 0.8s ease-in-out infinite alternate;
+    }
+    @keyframes bob { to { margin-top: -6px; } }
+
+    /* 「これを買えば解決」のノードと、マップを開くボタンを光らせる（お金が足りなくても光る） */
+    #upgrade-open.hint { border-color: #ff7043; animation: hint-pulse 0.9s ease-in-out infinite; }
+    @keyframes hint-pulse {
+      50% { box-shadow: 0 0 0 4px rgba(255, 112, 67, 0.45), 0 3px 0 #c75a33; }
+    }
+
+    /* 建設モード（左下） */
+    /* 左下のメニュー：「🛠 メニュー」を押すと、上に3つのボタンが展開する */
+    #action-menu {
+      position: fixed; left: 12px; bottom: 64px;
+      display: flex; flex-direction: column-reverse; align-items: flex-start; gap: 8px;
+    }
+    #action-menu .menu-items { display: none; flex-direction: column-reverse; align-items: flex-start; gap: 8px; }
+    #action-menu.open .menu-items { display: flex; }
+    #menu-toggle {
+      cursor: pointer; padding: 6px 14px; border-radius: 12px;
+      background: #fff; border: 3px solid #7a8a99; box-shadow: 0 3px 0 #55606b;
+      font: bold 14px sans-serif; color: #2a333b;
+    }
+    #action-menu.open #menu-toggle { background: #e8eef3; }
+    #reset-button {
+      cursor: pointer; padding: 4px 12px; border-radius: 10px;
+      background: #fff; border: 2px solid #d9a0a0; color: #a04040;
+      font: bold 12px sans-serif;
+    }
+    #build-button {
+      cursor: pointer; padding: 6px 14px; border-radius: 12px;
+      background: #fff; border: 3px solid #f0a030; box-shadow: 0 3px 0 #c07a10;
+      font: bold 14px sans-serif; color: #6a4300;
+    }
+    /* 自動収穫のON・OFF（建設ボタンの上） */
+    #auto-harvest-button {
+      cursor: pointer; padding: 6px 14px; border-radius: 12px;
+      background: #fff; border: 3px solid #4f8fe0; box-shadow: 0 3px 0 #2f6bb8;
+      font: bold 14px sans-serif; color: #234;
+    }
+    #auto-harvest-button.off {
+      border-color: #aab; box-shadow: 0 3px 0 #889; color: #889; background: #eef;
+    }
+    /* 動かす・撤去（自動収穫ボタンの上） */
+    #move-button {
+      cursor: pointer; padding: 6px 14px; border-radius: 12px;
+      background: #fff; border: 3px solid #9b59d0; box-shadow: 0 3px 0 #6e3a9e;
+      font: bold 14px sans-serif; color: #3a2350;
+    }
+    #move-panel {
+      position: fixed; left: 50%; top: 12px; transform: translateX(-50%);
+      max-width: 60vw; padding: 8px 14px; border-radius: 12px;
+      background: rgba(255, 255, 255, 0.95); border: 3px solid #9b59d0;
+      font: bold 13px sans-serif; color: #333; text-align: center;
+    }
+    .move-buttons { display: flex; gap: 8px; margin-top: 8px; justify-content: center; }
+    .move-buttons[hidden] { display: none; }
+    .move-buttons button {
+      cursor: pointer; padding: 6px 12px; border-radius: 8px; border: none;
+      font: bold 13px sans-serif; background: #eee; color: #333;
+    }
+    .move-buttons [data-action="remove"] { background: #e5534b; color: #fff; }
+    #build-panel {
+      position: fixed; left: 12px; bottom: 196px; width: 300px;
+      padding: 10px 12px; border-radius: 12px;
+      background: rgba(255, 255, 255, 0.95); border: 3px solid #f0a030;
+      font: 13px sans-serif; color: #333;
+    }
+    .build-cost { margin-top: 6px; color: #666; font-size: 12px; }
+    .build-cost b { color: #b07800; font-size: 14px; }
+    .build-buttons { display: flex; gap: 8px; margin-top: 8px; }
+    .build-buttons button {
+      flex: 1; cursor: pointer; padding: 6px; border-radius: 8px; border: none;
+      font: bold 13px sans-serif; background: #eee; color: #333;
+    }
+    .build-buttons [data-action="finish"] { background: #7cc35a; color: #fff; }
+    .build-buttons button:disabled { opacity: 0.45; cursor: default; }
+
+    /* 家を置く・土地を広げるときの説明（画面上の中央） */
+    #place-panel, #expand-panel {
+      position: fixed; left: 50%; top: 12px; transform: translateX(-50%);
+      max-width: 60vw; padding: 8px 14px; border-radius: 12px;
+      background: rgba(255, 255, 255, 0.95); border: 3px solid #e5534b;
+      font: bold 13px sans-serif; color: #333; text-align: center;
+    }
+
+    /* 土地を広げるときの、区画ごとの値段の札 */
+    .world-label.price-label { background: #f5b800; box-shadow: 0 2px 0 #a07400; }
+
+    /* 開発者用パネル（?dev のときだけ出る） */
+    #dev-tools {
+      position: fixed; right: 196px; bottom: 12px;
+      display: flex; flex-direction: column; gap: 4px;
+      padding: 6px 8px; border-radius: 10px;
+      background: rgba(40, 40, 40, 0.85); font: 12px sans-serif; color: #fff;
+      z-index: 10;
+    }
+    .dev-title { font-weight: bold; }
+    #dev-tools button {
+      cursor: pointer; padding: 4px 8px; border-radius: 6px; border: none;
+      background: #555; color: #fff; font: inherit;
+    }
+    #dev-tools button:hover { background: #777; }
+
+    #help {
+      position: fixed; left: 12px; bottom: 12px;
+      padding: 6px 10px; border-radius: 8px;
+      background: rgba(255, 255, 255, 0.8);
+      font: 14px sans-serif; color: #333;
+    }
+
+    /* カーソルの横に出る「持っているレモンの数」 */
+    #hand-label {
+      position: fixed; pointer-events: none;
+      padding: 2px 8px; border-radius: 10px;
+      background: #fff; border: 2px solid #f5b800;
+      font: bold 14px sans-serif; color: #7a5200;
+    }
+    #hand-label.pop { animation: hand-pop 0.15s ease-out; }
+    @keyframes hand-pop { 50% { transform: scale(1.35); } }
+
+    /* 出荷したときに浮かび上がる金額 */
+    .floating-text {
+      position: fixed; pointer-events: none;
+      transform: translate(-50%, -50%);
+      font: bold 28px sans-serif; color: #ffb300;
+      -webkit-text-stroke: 1.5px #7a5200;
+      animation: float-up 1.2s ease-out forwards;
+    }
+    @keyframes float-up {
+      0% { opacity: 0; margin-top: 10px; transform: translate(-50%, -50%) scale(0.6); }
+      20% { opacity: 1; transform: translate(-50%, -50%) scale(1.15); }
+      100% { opacity: 0; margin-top: -70px; transform: translate(-50%, -50%) scale(1); }
+    }
+  </style>
+  <!-- Three.js を CDN から読み込む（import "three" で使えるようにする） -->
+  <script type="importmap">
+    { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+  </script>
+</head>
+<body>
+  <div id="hud"></div>
+  <div id="money"></div>
+  <div id="help">クリック：収穫・拾う・箱に入れる　WASD：移動　ホイール：拡大・縮小</div>
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
